@@ -1,0 +1,109 @@
+Emacs 31.1 build fixes for MSYS2 CLANGARM64
+
+Modified by Jason Fang, first recorded 2026-10-15. See THIRD_PARTY.md.
+
+Original modifications are licensed under the MIT License. See LICENSE.
+Upstream GNU Emacs code is copyright the Free Software Foundation, Inc.
+Upstream GNU Emacs code reproduced below remains under the GNU General
+Public License, version 3 or later. See COPYING.
+
+--- a/configure.ac
++++ b/configure.ac
+@@ -1542,7 +1542,7 @@
+   ;;
+ 
+   # MinGW64
+-  x86_64-*-* )
++  x86_64-*-* | aarch64-*-mingw* )
+     case "${canonical}" in
+       *-mingw* )
+ 		opsys=mingw32
+@@ -2267,6 +2267,7 @@
+   C_SWITCH_SYSTEM="-ma -qmaxmem=4000"
+ if test "$opsys" = "mingw32"; then
+   case "$canonical" in
++    aarch64-*-mingw*) ;;
+     x86_64-*-mingw*) C_SWITCH_SYSTEM="-mtune=generic" ;;
+     *) C_SWITCH_SYSTEM="-mtune=pentium4" ;;
+   esac
+@@ -7523,7 +7524,7 @@
+    ## If the values of -image-base are modified, the corresponding
+    ## values of DEFAULT_IMAGE_BASE in w32fns.c should be kept in sync.
+    case "$canonical" in
+-     x86_64-*-*) LD_SWITCH_SYSTEM_TEMACS="-Wl,-stack,0x00800000 -Wl,-heap,0x00100000 -Wl,-image-base,0x400000000 -Wl,-entry,__start -Wl,-Map,./temacs.map" ;;
++     x86_64-*-* | aarch64-*-*) LD_SWITCH_SYSTEM_TEMACS="-Wl,-stack,0x00800000 -Wl,-heap,0x00100000 -Wl,-image-base,0x400000000 -Wl,-entry,__start -Wl,-Map,./temacs.map" ;;
+      *) LD_SWITCH_SYSTEM_TEMACS="-Wl,-stack,0x00800000 -Wl,-heap,0x00100000 -Wl,-image-base,0x01000000 -Wl,-entry,__start -Wl,-Map,./temacs.map" ;;
+    esac
+    ;;
+--- a/nt/emacs.rc.in
++++ b/nt/emacs.rc.in
+@@ -1,6 +1,8 @@
+ Emacs ICON   icons/emacs.ico
+ 32649 CURSOR icons/hand.cur
+-#if defined (WIN64) || defined (__x86_64__)
++#if defined (__aarch64__)
++1 24 "emacs.manifest"
++#elif defined (WIN64) || defined (__x86_64__)
+ 1 24 "emacs-x64.manifest"
+ #else
+ 1 24 "emacs-x86.manifest"
+--- a/nt/inc/ms-w32.h
++++ b/nt/inc/ms-w32.h
+@@ -193,7 +193,9 @@
+ /* The following is needed for recovery from C stack overflows.  */
+ #include <setjmp.h>
+ typedef jmp_buf sigjmp_buf;
+-#ifdef MINGW_W64
++#ifdef __aarch64__
++#define sigsetjmp(j,m) __mingw_setjmp(j)
++#elif defined MINGW_W64
+ /* Evidently, MinGW64's longjmp crashes when invoked from an exception
+    handler, see https://sourceforge.net/p/mingw-w64/mailman/message/32421953/.
+    This seems to be an unsolved problem in the MinGW64 runtime.  So we
+--- a/src/syswait.h
++++ b/src/syswait.h
+@@ -25,7 +25,7 @@
+ 
+ #include <sys/types.h>
+ 
+-#ifdef HAVE_SYS_WAIT_H	/* We have sys/wait.h with POSIXish definitions.  */
++#if defined HAVE_SYS_WAIT_H || defined WINDOWSNT
+ #include <sys/wait.h>
+ #endif  /* !HAVE_SYS_WAIT_H */
+ 
+--- a/src/w32fns.c
++++ b/src/w32fns.c
+@@ -12062,7 +12062,9 @@
+      too nested calls to mark_object.  No way to survive.  */
+   if (gc_in_progress)
+     terminate_due_to_signal (SIGSEGV, 40);
+-#ifdef _WIN64
++#ifdef __aarch64__
++  __mingw_longjmp (return_to_command_loop, 1);
++#elif defined _WIN64
+   /* See ms-w32.h: MinGW64's longjmp crashes if invoked in this context.  */
+   __builtin_longjmp (return_to_command_loop, 1);
+ #else
+@@ -12090,7 +12092,9 @@
+       && GetCurrentThreadId () == dwMainThreadId)
+     {
+       /* Call stack_overflow_handler ().  */
+-#ifdef _WIN64
++#ifdef __aarch64__
++      exception_data->ContextRecord->Pc = (DWORD_PTR) &stack_overflow_handler;
++#elif defined _WIN64
+       exception_data->ContextRecord->Rip = (DWORD_PTR) &stack_overflow_handler;
+ #else
+       exception_data->ContextRecord->Eip = (DWORD_PTR) &stack_overflow_handler;
+--- a/lisp/term/w32-nt.el
++++ b/lisp/term/w32-nt.el
+@@ -118,7 +118,8 @@
+                          "libtree-sitter.dll"
+                          "libtree-sitter-0.dll")
+          ;; Supported ABI 13..15
+-         '(tree-sitter "libtree-sitter-0.26.dll"
++         '(tree-sitter "libtree-sitter-0.27.dll"
++                       "libtree-sitter-0.26.dll"
+                        "libtree-sitter-0.25.dll"))))
+ 
+ 

@@ -1,0 +1,101 @@
+name: Build
+
+on:
+    schedule:
+        - cron: '0 0 * * *'
+    workflow_dispatch:
+        inputs:
+            emacs_channel:
+                description: Build the latest version
+                type: choice
+                options: [stable, pretest]
+                default: stable
+
+permissions:
+    contents: read
+
+concurrency:
+    group: emacs-build-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    resolve:
+        runs-on: ubuntu-26.04
+        outputs:
+            matrix: ${{ steps.resolve.outputs.matrix }}
+            build_needed: ${{ steps.resolve.outputs.build_needed }}
+        steps:
+            - uses: actions/checkout@v5
+            - name: Resolve GNU source archive
+              id: resolve
+              env:
+                  EMACS_CHANNEL: ${{ inputs.emacs_channel }}
+                  GH_TOKEN: ${{ github.token }}
+              run: python3 scripts/resolve.py
+
+    build:
+        name: Build ${{ matrix.channel }} ${{ matrix.version }}
+        needs: resolve
+        if: needs.resolve.outputs.build_needed == 'true'
+        strategy:
+            fail-fast: false
+            matrix: ${{ fromJSON(needs.resolve.outputs.matrix) }}
+        runs-on: windows-11-arm
+        timeout-minutes: 360
+        env:
+            EMACS_VERSION: ${{ matrix.version }}
+            EMACS_CHANNEL: ${{ matrix.channel }}
+            EMACS_SOURCE_URL: ${{ matrix.source_url }}
+        defaults:
+            run:
+                shell: msys2 {0}
+        steps:
+            - name: Check out build recipe
+              uses: actions/checkout@v5
+            - name: Set up MSYS2 CLANGARM64
+              uses: msys2/setup-msys2@v2
+              with:
+                  msystem: CLANGARM64
+                  update: true
+                  install: base-devel curl gnupg patch zip git
+                  pacboy: >-
+                      cc:p autotools:p python:p
+            - name: Install runtime dependencies
+              run: bash scripts/dependencies.sh
+            - name: Download and verify source
+              run: bash scripts/prepare-source.sh
+            - name: Build Emacs with MSYS2 libraries
+              run: bash build.sh
+            - name: Record installer engine license
+              id: inno
+              shell: pwsh
+              run: |
+                  $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+                  if (!(Test-Path $compiler)) {
+                    $compiler = (Get-Command ISCC.exe -ErrorAction Stop).Source
+                  }
+                  "compiler=$compiler" >> $env:GITHUB_OUTPUT
+                  ./scripts/record-inno.ps1 -Compiler $compiler -Destination "$env:GITHUB_WORKSPACE/bin/licenses/inno-setup"
+            - name: Package binaries and MSYS2 dependency sources
+              run: bash scripts/package.sh
+            - name: Create ARM64 installer
+              shell: pwsh
+              env:
+                  INNO_COMPILER: ${{ steps.inno.outputs.compiler }}
+              run: |
+                  $numericVersion = $env:EMACS_VERSION.Split('-')[0]
+                  & $env:INNO_COMPILER /Q "/DEmacsVersion=$env:EMACS_VERSION" "/DNumericVersion=$numericVersion" "/DChannel=$env:EMACS_CHANNEL" scripts/installer.iss
+                  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            - name: Generate checksums
+              run: |
+                  cd dist
+                  name="emacs-${EMACS_VERSION}-${EMACS_CHANNEL}-windows-arm64"
+                  sha256sum "./$name.zip" "./$name-setup.exe" "./$name-source.tar.xz" > SHA256SUMS
+            - name: Upload release files
+              uses: actions/upload-artifact@v6
+              with:
+                  name: ${{ matrix.artifact_name }}
+                  path: dist/*
+                  if-no-files-found: error
+                  retention-days: 30
+                  compression-level: 0

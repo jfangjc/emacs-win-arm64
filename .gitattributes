@@ -1,0 +1,11 @@
+* text=auto
+# build.sh compares this file byte-for-byte with the upstream source archive.
+/COPYING text eol=lf
+*.sh text eol=lf
+*.patch text eol=lf
+*.manifest text eol=lf
+*.sha256 text eol=lf
+*.yml text eol=lf
+*.iss text eol=lf
+*.ps1 text eol=lf
+*.py text eol=lf
